@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Live Chess Viewer</title>
+    <style>
+        /* Algemene stijlen voor de body */
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            padding: 20px;
+        }
+
+        /* Container voor bord en move-list */
+        .container {
+            display: flex;
+            gap: 20px;
+            align-items: flex-start;
+        }
+
+        /* Stijlen voor het schaakbord */
+        .board {
+            width: 400px;
+            height: 400px;
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            border: 2px solid #333;
+            margin: 20px 0;
+        }
+
+        /* Algemene stijlen voor de schaakvelden */
+        .square {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 2.5em;
+            position: relative;
+            width: 100%;
+            aspect-ratio: 1;
+        }
+
+        /* Kleurstijlen voor witte en zwarte velden */
+        .white {
+            background-color: #f0d9b5;
+        }
+
+        .black {
+            background-color: #b58863;
+        }
+
+        /* Stijlen voor de bedieningsknoppen */
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 8px 16px;
+            font-size: 1em;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+
+        /* Hover-effect voor knoppen */
+        button:hover {
+            background-color: #45a049;
+        }
+
+        /* Stijlen voor uitgeschakelde knoppen */
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+
+        /* Stijl voor de statusbalk */
+        .status {
+            margin-top: 10px;
+            font-size: 1.2em;
+        }
+
+        /* Stijlen voor schaakstukken */
+        .piece {
+            position: absolute;
+            cursor: default;
+            user-select: none;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        /* Stijlen voor game-informatie sectie */
+        #gameInfo {
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #fff;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Stijlen voor de lijst met zetten */
+        .move-list {
+            width: 200px;
+            height: 400px;
+            overflow-y: auto;
+            background: white;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 10px;
+        }
+
+        /* Stijlen voor individuele zetitems */
+        .move-list-item {
+            padding: 5px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* Hover-effect voor zetitems */
+        .move-list-item:hover {
+            background-color: #f0f0f0;
+        }
+
+        /* Stijl voor geselecteerde zetitems */
+        .move-list-item.selected {
+            background-color: #e0e0e0;
+            font-weight: bold;
+        }
+
+        /* Stijlen voor de sectie met geslagen stukken */
+        .captured-pieces {
+            width: 200px;
+            background: white;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 10px;
+            margin-top: 10px;
+        }
+
+        /* Stijlen voor rijen van geslagen stukken */
+        .captured-row {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+        }
+
+        /* Stijlen voor geslagen stukken binnen een rij */
+        .captured-row span {
+            font-size: 1.5em;
+            margin-right: 5px;
+        }
+
+        /* Stijlen voor spelerslabels */
+        .player-label {
+            font-weight: bold;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Live Chess Viewer</h1>
+
+    <!-- Sectie voor game-informatie -->
+    <div id="gameInfo">
+        Game ID: <span id="gameId">Loading...</span>
+    </div>
+
+    <!-- Bedieningsknoppen voor navigatie door zetten -->
+    <div class="controls">
+        <button id="prevButton">Previous Move</button>
+        <button id="nextButton">Next Move</button>
+        <button id="latestButton">Latest Position</button>
+    </div>
+
+    <!-- Container voor het schaakbord en de zetlijst -->
+    <div class="container">
+        <div class="board" id="board"></div>
+        <div class="move-list" id="moveList"></div>
+    </div>
+
+    <!-- Statusbalk voor game-informatie -->
+    <div class="status" id="status">Loading game...</div>
+
+    <script>
+        // Selecteren van DOM-elementen
+        const board = document.getElementById('board');
+        const status = document.getElementById('status');
+        const gameIdSpan = document.getElementById('gameId');
+        const moveList = document.getElementById('moveList');
+
+        // Variabelen voor game state
+        let currentGameId = null;
+        let currentMoveIndex = 0;
+        let totalMoves = 0;
+        let isViewingLatest = true;
+        let pollInterval = null;
+        let lastFen = null;
+        let moveHistory = [];
+
+        // Basis-URL voor de API
+        const API_BASE_URL = 'http://localhost:8000';
+
+        /**
+         * Creëer de schaakbordvelden dynamisch
+         */
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const square = document.createElement('div');
+                square.className = `square ${(row + col) % 2 === 0 ? 'white' : 'black'}`;
+                square.id = `${String.fromCharCode(97 + col)}${8 - row}`;
+                board.appendChild(square);
+            }
+        }
+
+        /**
+         * Mapping van FEN karakters naar Unicode schaakstukken
+         */
+        const pieces = {
+            'k': '♔', 'q': '♕', 'r': '♖', 'b': '♗', 'n': '♘', 'p': '♙',
+            'K': '♚', 'Q': '♛', 'R': '♜', 'B': '♝', 'N': '♞', 'P': '♟'
+        };
+
+        /**
+         * Event listeners voor bedieningsknoppen met debug logging
+         */
+        document.getElementById('prevButton').addEventListener('click', (e) => {
+            console.log('Previous button clicked');
+            e.preventDefault();
+            e.stopPropagation();
+            previousMove();
+        });
+
+        document.getElementById('nextButton').addEventListener('click', (e) => {
+            console.log('Next button clicked');
+            e.preventDefault();
+            e.stopPropagation();
+            nextMove();
+        });
+
+        document.getElementById('latestButton').addEventListener('click', (e) => {
+            console.log('Latest button clicked');
+            e.preventDefault();
+            e.stopPropagation();
+            jumpToLatest();
+        });
+
+        /**
+         * Update de lijst met zetten in de UI
+         * @param {Array} moves - Array van zetten
+         * @param {number} currentIndex - Huidige zetindex
+         */
+        function updateMoveList(moves, currentIndex) {
+            moveList.innerHTML = '';
+            moves.forEach((move, index) => {
+                const moveItem = document.createElement('div');
+                moveItem.className = `move-list-item${index === currentIndex ? ' selected' : ''}`;
+                moveItem.innerHTML = `
+                    <span>Move ${index + 1}</span>
+                    <span>${new Date(move.timestamp * 1000).toLocaleTimeString()}</span>
+                `;
+                moveItem.addEventListener('click', () => showMove(index));
+                moveList.appendChild(moveItem);
+            });
+
+            // Scroll naar de geselecteerde zet
+            const selectedItem = moveList.querySelector('.selected');
+            if (selectedItem) {
+                selectedItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        }
+
+        /**
+         * Haal de positie op voor een specifieke zet of de huidige positie
+         * @param {number|null} moveNumber - Zetnummer (nulgebaseerd) of null voor huidige positie
+         * @returns {Object|null} - Gegevens van de positie of null bij fout
+         */
+        async function fetchPosition(moveNumber = null) {
+            if (!currentGameId) return null;
+
+            try {
+                const endpoint = moveNumber !== null
+                    ? `${API_BASE_URL}/game/${currentGameId}/history/${moveNumber}`
+                    : `${API_BASE_URL}/game/${currentGameId}/current`;
+
+                const response = await fetch(endpoint, {
+                    cache: 'no-store',
+                    headers: {
+                        'Cache-Control': 'no-cache'
+                    }
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Error fetching position:', error);
+                return null;
+            }
+        }
+
+        /**
+         * Start polling voor nieuwe zetten
+         */
+        function startPolling() {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+            }
+
+            pollInterval = setInterval(async () => {
+                if (document.hidden) return;
+
+                try {
+                    const response = await fetch(`${API_BASE_URL}/game/${currentGameId}/moves`, {
+                        cache: 'no-store',
+                        headers: {
+                            'Cache-Control': 'no-cache'
+                        }
+                    });
+                    if (!response.ok) throw new Error('Failed to fetch moves');
+
+                    const data = await response.json();
+
+                    // Alleen updaten als er nieuwe zetten zijn
+                    if (data.moves.length > totalMoves) {
+                        moveHistory = data.moves;
+                        totalMoves = data.moves.length;
+
+                        // Alleen de weergave bijwerken als de gebruiker naar de laatste zet kijkt
+                        if (isViewingLatest) {
+                            currentMoveIndex = totalMoves - 1;
+                            const latestMove = data.moves[currentMoveIndex];
+                            displayPosition(latestMove.fen);
+                        }
+
+                        // Altijd de zetlijst en status bijwerken
+                        updateMoveList(data.moves, currentMoveIndex);
+                        updateStatus();
+                    }
+
+                    // Controleer of de game actief is
+                    if (!data.is_active) {
+                        status.textContent = 'Game finished!';
+                        clearInterval(pollInterval);
+                    }
+                } catch (error) {
+                    console.error('Error polling moves:', error);
+                }
+            }, 1000);
+        }
+
+        /**
+         * Bereken geslagen stukken op basis van de FEN string
+         * @param {string} fen - FEN string van de huidige positie
+         * @returns {Object} - Geslagen witte en zwarte stukken
+         */
+        function calculateCapturedPieces(fen) {
+            // Standaard stukken in startpositie
+            const startingPieces = {
+                'P': 8, 'N': 2, 'B': 2, 'R': 2, 'Q': 1, 'K': 1,  // wit
+                'p': 8, 'n': 2, 'b': 2, 'r': 2, 'q': 1, 'k': 1   // zwart
+            };
+
+            // Tel stukken in huidige positie
+            const currentPieces = {};
+            const position = fen.split(' ')[0];
+            for (const char of position) {
+                if (char in startingPieces) {
+                    currentPieces[char] = (currentPieces[char] || 0) + 1;
+                }
+            }
+
+            // Bereken geslagen stukken
+            const capturedPieces = {
+                white: [], // geslagen witte stukken
+                black: []  // geslagen zwarte stukken
+            };
+
+            for (const piece in startingPieces) {
+                const current = currentPieces[piece] || 0;
+                const captured = startingPieces[piece] - current;
+
+                for (let i = 0; i < captured; i++) {
+                    if (piece === piece.toUpperCase()) {
+                        capturedPieces.white.push(pieces[piece]);
+                    } else {
+                        capturedPieces.black.push(pieces[piece.toUpperCase()]);
+                    }
+                }
+            }
+
+            return capturedPieces;
+        }
+
+        /**
+         * Toon de schaakpositie op basis van de FEN string
+         * @param {string} fen - FEN string van de positie
+         */
+        function displayPosition(fen) {
+            if (fen === lastFen) return;
+            lastFen = fen;
+
+            // Split FEN string om stukplaatsing te krijgen
+            const [position] = fen.split(' ');
+            const rows = position.split('/');
+
+            // Wis alle schaakvelden
+            document.querySelectorAll('.square').forEach(square => {
+                square.innerHTML = '';
+            });
+
+            // Plaats stukken volgens FEN
+            rows.forEach((row, rowIndex) => {
+                let colIndex = 0;
+                for (let char of row) {
+                    if (isNaN(char)) {
+                        const square = document.getElementById(`${String.fromCharCode(97 + colIndex)}${8 - rowIndex}`);
+                        const pieceElement = document.createElement('span');
+                        pieceElement.className = 'piece';
+                        pieceElement.textContent = pieces[char] || char;
+                        square.appendChild(pieceElement);
+                        colIndex++;
+                    } else {
+                        colIndex += parseInt(char);
+                    }
+                }
+            });
+        }
+
+        /**
+         * Toon een specifieke zet op basis van de zetindex
+         * @param {number} moveNumber - Zetindex (nulgebaseerd)
+         */
+        async function showMove(moveNumber) {
+            isViewingLatest = moveNumber === totalMoves - 1;
+            currentMoveIndex = moveNumber;
+            const data = await fetchPosition(moveNumber);
+            if (data) {
+                displayPosition(data.fen);
+                updateStatus();
+                updateMoveList(moveHistory, currentMoveIndex);
+            }
+        }
+
+        /**
+         * Navigeer naar de vorige zet
+         */
+        async function previousMove() {
+            if (currentMoveIndex > 0) {
+                showMove(currentMoveIndex - 1);
+            }
+        }
+
+        /**
+         * Navigeer naar de volgende zet
+         */
+        async function nextMove() {
+            if (currentMoveIndex < totalMoves - 1) {
+                showMove(currentMoveIndex + 1);
+            }
+        }
+
+        /**
+         * Spring naar de laatste zet en blijf live bijwerken
+         */
+        async function jumpToLatest() {
+            const data = await fetchPosition();
+            if (data) {
+                currentMoveIndex = totalMoves - 1;
+                isViewingLatest = true;
+                displayPosition(data.fen);
+                updateStatus();
+                updateMoveList(moveHistory, currentMoveIndex);
+            }
+        }
+
+        /**
+         * Update de statusbalk op basis van de huidige kijkmodus
+         */
+        function updateStatus() {
+            const viewing = isViewingLatest
+                ? 'Viewing latest move (live)'
+                : `Viewing move ${currentMoveIndex + 1} of ${totalMoves} (paused)`;
+            status.textContent = viewing;
+
+            // Schakel knoppen in of uit op basis van de huidige positie
+            document.getElementById('prevButton').disabled = currentMoveIndex === 0;
+            document.getElementById('nextButton').disabled = currentMoveIndex === totalMoves - 1;
+            document.getElementById('latestButton').disabled = isViewingLatest;
+        }
+
+        /**
+         * Initialiseer de game door het game ID uit de URL te halen en polling te starten
+         */
+        function initializeGame() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const gameId = urlParams.get('game');
+
+            if (!gameId) {
+                status.textContent = 'No game ID provided in URL';
+                return;
+            }
+
+            currentGameId = gameId;
+            gameIdSpan.textContent = currentGameId;
+            startPolling();
+        }
+
+        // Event listener voor het laden van de pagina
+        window.addEventListener('load', initializeGame);
+
+        // Event listener voor het verlaten van de pagina om polling te stoppen
+        window.addEventListener('beforeunload', () => {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+            }
+        });
+    </script>
+</body>
+
+</html>
